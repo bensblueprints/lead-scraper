@@ -1,48 +1,27 @@
 {
-  "name": "Lead Machine - Master Industry Scraper & Email Campaign",
+  "name": "Lead Machine - Master US Industry Scraper",
   "nodes": [
     {
       "parameters": {
         "rule": {
-          "interval": [{"field": "hours", "hoursInterval": 6}]
+          "interval": [{"field": "hours", "hoursInterval": 4}]
         }
       },
       "id": "schedule-trigger",
-      "name": "Run Every 6 Hours",
+      "name": "Run Every 4 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.1,
       "position": [180, 300]
     },
     {
       "parameters": {
-        "jsCode": "// Industries to scrape\nconst industries = [\n  { name: 'doctors', searchTerms: ['medical practice', 'physician office', 'doctor clinic'] },\n  { name: 'lawyers', searchTerms: ['law firm', 'attorney office', 'legal practice'] },\n  { name: 'dentists', searchTerms: ['dental practice', 'dentist office', 'dental clinic'] },\n  { name: 'chiropractors', searchTerms: ['chiropractic clinic', 'chiropractor office'] },\n  { name: 'real_estate', searchTerms: ['real estate agency', 'realtor office', 'property management'] },\n  { name: 'restaurants', searchTerms: ['restaurant', 'cafe', 'eatery'] },\n  { name: 'plumbers', searchTerms: ['plumbing company', 'plumber service'] },\n  { name: 'electricians', searchTerms: ['electrical contractor', 'electrician service'] },\n  { name: 'hvac', searchTerms: ['hvac company', 'air conditioning service', 'heating contractor'] },\n  { name: 'roofing', searchTerms: ['roofing company', 'roof contractor'] },\n  { name: 'auto_repair', searchTerms: ['auto repair shop', 'mechanic', 'car service'] },\n  { name: 'insurance', searchTerms: ['insurance agency', 'insurance broker'] },\n  { name: 'accountants', searchTerms: ['accounting firm', 'cpa office', 'bookkeeper'] },\n  { name: 'veterinarians', searchTerms: ['veterinary clinic', 'vet office', 'animal hospital'] },\n  { name: 'fitness', searchTerms: ['gym', 'fitness center', 'personal trainer'] }\n];\n\nreturn industries.map(i => ({ json: i }));"
+        "jsCode": "// US States and Major Cities for targeting\nconst usLocations = [\n  { city: 'New York', state: 'NY' },\n  { city: 'Los Angeles', state: 'CA' },\n  { city: 'Chicago', state: 'IL' },\n  { city: 'Houston', state: 'TX' },\n  { city: 'Phoenix', state: 'AZ' },\n  { city: 'Philadelphia', state: 'PA' },\n  { city: 'San Antonio', state: 'TX' },\n  { city: 'San Diego', state: 'CA' },\n  { city: 'Dallas', state: 'TX' },\n  { city: 'Austin', state: 'TX' },\n  { city: 'Jacksonville', state: 'FL' },\n  { city: 'Fort Worth', state: 'TX' },\n  { city: 'Columbus', state: 'OH' },\n  { city: 'Charlotte', state: 'NC' },\n  { city: 'San Francisco', state: 'CA' },\n  { city: 'Indianapolis', state: 'IN' },\n  { city: 'Seattle', state: 'WA' },\n  { city: 'Denver', state: 'CO' },\n  { city: 'Boston', state: 'MA' },\n  { city: 'Nashville', state: 'TN' },\n  { city: 'Atlanta', state: 'GA' },\n  { city: 'Miami', state: 'FL' },\n  { city: 'Portland', state: 'OR' },\n  { city: 'Las Vegas', state: 'NV' },\n  { city: 'Detroit', state: 'MI' },\n  { city: 'Minneapolis', state: 'MN' },\n  { city: 'Tampa', state: 'FL' },\n  { city: 'Orlando', state: 'FL' },\n  { city: 'St. Louis', state: 'MO' },\n  { city: 'Pittsburgh', state: 'PA' }\n];\n\nconst industries = [\n  { name: 'doctors', searchTerms: ['medical practice', 'physician office', 'family doctor', 'internal medicine'] },\n  { name: 'lawyers', searchTerms: ['law firm', 'attorney at law', 'legal services', 'injury lawyer'] },\n  { name: 'dentists', searchTerms: ['dental practice', 'family dentist', 'cosmetic dentistry'] },\n  { name: 'chiropractors', searchTerms: ['chiropractic clinic', 'chiropractor', 'spine center'] },\n  { name: 'real_estate', searchTerms: ['real estate agent', 'realtor', 'property management'] },\n  { name: 'restaurants', searchTerms: ['restaurant', 'catering', 'cafe'] },\n  { name: 'plumbers', searchTerms: ['plumbing company', 'plumber', '24 hour plumber'] },\n  { name: 'electricians', searchTerms: ['electrical contractor', 'electrician', 'electrical services'] },\n  { name: 'hvac', searchTerms: ['hvac contractor', 'air conditioning repair', 'heating and cooling'] },\n  { name: 'roofing', searchTerms: ['roofing contractor', 'roof repair', 'roofing company'] },\n  { name: 'auto_repair', searchTerms: ['auto repair', 'car mechanic', 'auto body shop'] },\n  { name: 'insurance', searchTerms: ['insurance agent', 'insurance agency', 'insurance broker'] },\n  { name: 'accountants', searchTerms: ['cpa', 'accounting firm', 'tax accountant', 'bookkeeper'] },\n  { name: 'veterinarians', searchTerms: ['veterinarian', 'animal hospital', 'vet clinic'] },\n  { name: 'fitness', searchTerms: ['gym', 'fitness center', 'personal trainer', 'crossfit'] }\n];\n\n// Select random industry and location\nconst industry = industries[Math.floor(Math.random() * industries.length)];\nconst location = usLocations[Math.floor(Math.random() * usLocations.length)];\nconst searchTerm = industry.searchTerms[Math.floor(Math.random() * industry.searchTerms.length)];\n\nreturn [{\n  json: {\n    industry: industry.name,\n    searchTerm: searchTerm,\n    city: location.city,\n    state: location.state,\n    country: 'USA',\n    url: `https://www.yellowpages.com/search?search_terms=${encodeURIComponent(searchTerm)}&geo_location_terms=${encodeURIComponent(location.city + ', ' + location.state)}`\n  }\n}];"
       },
-      "id": "get-industries",
-      "name": "Get All Industries",
+      "id": "get-us-target",
+      "name": "Get US Target",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [400, 300]
-    },
-    {
-      "parameters": {
-        "batchSize": 1,
-        "options": {}
-      },
-      "id": "loop-industries",
-      "name": "Loop Industries",
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [620, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const industry = $input.first().json;\nconst searchTerm = industry.searchTerms[Math.floor(Math.random() * industry.searchTerms.length)];\nconst cities = ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia', 'San Antonio', 'San Diego', 'Dallas', 'Austin'];\nconst city = cities[Math.floor(Math.random() * cities.length)];\n\n// Generate search URL (could be Google Maps, Yelp, Yellow Pages, etc.)\nconst searchUrl = `https://www.yellowpages.com/search?search_terms=${encodeURIComponent(searchTerm)}&geo_location_terms=${encodeURIComponent(city)}`;\n\nreturn [{\n  json: {\n    industry: industry.name,\n    searchTerm: searchTerm,\n    city: city,\n    url: searchUrl\n  }\n}];"
-      },
-      "id": "build-search",
-      "name": "Build Search URL",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [840, 300]
     },
     {
       "parameters": {
@@ -58,13 +37,13 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ url: $json.url, industry: $json.industry, verify_emails: true, save_to_db: true, push_to_ghl: false }) }}",
-        "options": {"timeout": 120000}
+        "options": {"timeout": 180000}
       },
       "id": "scrape-leads",
-      "name": "Scrape Leads",
+      "name": "Scrape US Leads",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1060, 300]
+      "position": [620, 300]
     },
     {
       "parameters": {
@@ -85,74 +64,47 @@
       "name": "Has New Leads?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1280, 300]
+      "position": [840, 300]
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nreturn [{\n  json: {\n    message: `Scraped ${data.saved_leads} new leads for ${data.industry} from ${data.url}`,\n    industry: data.industry,\n    leads_saved: data.saved_leads,\n    emails_found: data.emails_found\n  }\n}];"
+        "jsCode": "const input = $('Get US Target').first().json;\nconst result = $input.first().json;\nreturn [{\n  json: {\n    success: true,\n    message: `Scraped ${result.saved_leads} US leads for ${input.industry} in ${input.city}, ${input.state}`,\n    industry: input.industry,\n    location: `${input.city}, ${input.state}`,\n    leads_saved: result.saved_leads,\n    emails_found: result.emails_found,\n    verified: result.verified_emails?.length || 0\n  }\n}];"
       },
       "id": "log-success",
       "name": "Log Success",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1500, 200]
-    },
-    {
-      "parameters": {},
-      "id": "continue-loop",
-      "name": "Continue Loop",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [1500, 400]
+      "position": [1060, 200]
     },
     {
       "parameters": {
         "options": {}
       },
-      "id": "wait-between",
-      "name": "Wait 30s",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1.1,
-      "position": [1720, 300],
-      "webhookId": "wait-between-scrapes"
+      "id": "no-leads",
+      "name": "No Leads Found",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1060, 400]
     }
   ],
   "connections": {
-    "Run Every 6 Hours": {
-      "main": [[{"node": "Get All Industries", "type": "main", "index": 0}]]
+    "Run Every 4 Hours": {
+      "main": [[{"node": "Get US Target", "type": "main", "index": 0}]]
     },
-    "Get All Industries": {
-      "main": [[{"node": "Loop Industries", "type": "main", "index": 0}]]
+    "Get US Target": {
+      "main": [[{"node": "Scrape US Leads", "type": "main", "index": 0}]]
     },
-    "Loop Industries": {
-      "main": [
-        [{"node": "Build Search URL", "type": "main", "index": 0}],
-        []
-      ]
-    },
-    "Build Search URL": {
-      "main": [[{"node": "Scrape Leads", "type": "main", "index": 0}]]
-    },
-    "Scrape Leads": {
+    "Scrape US Leads": {
       "main": [[{"node": "Has New Leads?", "type": "main", "index": 0}]]
     },
     "Has New Leads?": {
       "main": [
         [{"node": "Log Success", "type": "main", "index": 0}],
-        [{"node": "Continue Loop", "type": "main", "index": 0}]
+        [{"node": "No Leads Found", "type": "main", "index": 0}]
       ]
-    },
-    "Log Success": {
-      "main": [[{"node": "Wait 30s", "type": "main", "index": 0}]]
-    },
-    "Continue Loop": {
-      "main": [[{"node": "Wait 30s", "type": "main", "index": 0}]]
-    },
-    "Wait 30s": {
-      "main": [[{"node": "Loop Industries", "type": "main", "index": 0}]]
     }
   },
   "settings": {"executionOrder": "v1"},
   "staticData": null,
-  "tags": ["lead-machine", "scraping", "all-industries"]
+  "tags": ["lead-machine", "scraping", "us-only"]
 }
