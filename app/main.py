@@ -13,7 +13,7 @@ import os
 
 from app.core.config import settings
 from app.modules.verifier import EmailVerifier
-from app.modules.scraper import WebsiteScraper
+from app.modules.scraper import WebScraper
 from app.modules.ghl import GHLClient
 from app.modules.warmup import EmailWarmup
 from app.modules.smtp_platform import SMTPPlatform, EMAIL_TEMPLATES
@@ -47,7 +47,7 @@ app.add_middleware(
 
 # Initialize modules
 verifier = EmailVerifier()
-scraper = WebsiteScraper()
+scraper = WebScraper()
 ghl_client = GHLClient(settings.GHL_API_KEY, settings.GHL_LOCATION_ID)
 warmup = EmailWarmup(settings.ENCRYPTION_KEY)
 smtp_platform = SMTPPlatform(settings.ENCRYPTION_KEY)
