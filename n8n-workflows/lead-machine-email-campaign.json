@@ -1,0 +1,150 @@
+{
+  "name": "Lead Machine - Email Campaign Sender",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 2}]}
+      },
+      "id": "schedule-campaigns",
+      "name": "Run Every 2 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://lead-machine:8000/api/smtp/accounts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "lead-machine-secure-key-2024"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-smtp-accounts",
+      "name": "Get SMTP Accounts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "leftValue": "={{ $json.accounts.length }}",
+              "rightValue": 0,
+              "operator": {"type": "number", "operation": "gt"}
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-accounts",
+      "name": "Has SMTP Accounts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const accounts = $input.first().json.accounts.filter(a => a.is_active);\nconst industries = ['doctors', 'lawyers', 'dentists', 'chiropractors', 'real_estate', 'restaurants', 'plumbers', 'electricians', 'hvac', 'roofing', 'auto_repair', 'insurance', 'accountants', 'veterinarians', 'fitness'];\n\n// Rotate through industries\nconst currentHour = new Date().getHours();\nconst industryIndex = currentHour % industries.length;\nconst industry = industries[industryIndex];\n\n// Get first active account\nconst account = accounts[0];\n\nreturn [{\n  json: {\n    industry: industry,\n    smtp_account_id: account?.id || 1,\n    daily_limit: Math.min(account?.daily_limit || 50, 50),\n    delay_seconds: 15\n  }\n}];"
+      },
+      "id": "select-campaign",
+      "name": "Select Industry Campaign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://lead-machine:8000/api/campaigns/templates",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "lead-machine-secure-key-2024"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-templates",
+      "name": "Get Email Templates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1060, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaign = $('Select Industry Campaign').first().json;\nconst templates = $input.first().json.templates;\n\n// Get template for industry or use default\nconst template = templates[campaign.industry] || templates['doctors'];\n\nreturn [{\n  json: {\n    industry: campaign.industry,\n    smtp_account_id: campaign.smtp_account_id,\n    subject: template.subject,\n    body_html: template.body_html,\n    daily_limit: campaign.daily_limit,\n    delay_seconds: campaign.delay_seconds\n  }\n}];"
+      },
+      "id": "build-campaign",
+      "name": "Build Campaign Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://lead-machine:8000/api/campaigns/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "lead-machine-secure-key-2024"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {"timeout": 300000}
+      },
+      "id": "send-campaign",
+      "name": "Send Email Campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1500, 200]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "no-accounts",
+      "name": "No Accounts - Skip",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [840, 400]
+    }
+  ],
+  "connections": {
+    "Run Every 2 Hours": {
+      "main": [[{"node": "Get SMTP Accounts", "type": "main", "index": 0}]]
+    },
+    "Get SMTP Accounts": {
+      "main": [[{"node": "Has SMTP Accounts?", "type": "main", "index": 0}]]
+    },
+    "Has SMTP Accounts?": {
+      "main": [
+        [{"node": "Select Industry Campaign", "type": "main", "index": 0}],
+        [{"node": "No Accounts - Skip", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Industry Campaign": {
+      "main": [[{"node": "Get Email Templates", "type": "main", "index": 0}]]
+    },
+    "Get Email Templates": {
+      "main": [[{"node": "Build Campaign Request", "type": "main", "index": 0}]]
+    },
+    "Build Campaign Request": {
+      "main": [[{"node": "Send Email Campaign", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": ["lead-machine", "email-campaign"]
+}

@@ -1,99 +1,42 @@
-"""Lead Machine - Main FastAPI application."""
-
-import asyncio
-from contextlib import asynccontextmanager
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException, Depends, Header, BackgroundTasks
+"""
+Lead Machine v2.0 - Complete Lead Scraping, Email & CRM Platform
+With industry-based databases, SMTP platform, and communications tracking
+"""
+from fastapi import FastAPI, HTTPException, Depends, Header, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+import asyncio
+import logging
+import os
 
 from app.core.config import settings
-from app.models.database import init_db, get_db, Lead, WarmupAccount
-from app.modules.verifier import verifier, init_verifier, VerificationResult
-from app.modules.scraper import scraper, ScrapeResult
-from app.modules.ghl import ghl_client, GHLResult
-from app.modules.warmup import warmup_manager, encrypt_password, WarmupStats
+from app.modules.verifier import EmailVerifier
+from app.modules.scraper import WebsiteScraper
+from app.modules.ghl import GHLClient
+from app.modules.warmup import EmailWarmup
+from app.modules.smtp_platform import SMTPPlatform, EMAIL_TEMPLATES
+from app.models.leads_db import Lead, EmailCampaign, Communication, SMTPAccount, ExportHistory, Industry
 
+# Database setup
+from sqlalchemy import create_engine, func
+from sqlalchemy.orm import sessionmaker, Session
+from app.models.leads_db import Base
 
-# Pydantic models for API
-class ScrapeRequest(BaseModel):
-    domain: Optional[str] = None
-    domains: Optional[List[str]] = None
+engine = create_engine(settings.DATABASE_URL, echo=False)
+Base.metadata.create_all(bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class VerifyRequest(BaseModel):
-    email: Optional[str] = None
-    emails: Optional[List[str]] = None
-
-
-class WarmupStartRequest(BaseModel):
-    email: str
-    smtp_host: str
-    smtp_port: int = 587
-    smtp_username: str
-    smtp_password: str
-    imap_host: str
-    imap_port: int = 993
-    imap_username: str
-    imap_password: str
-
-
-class WarmupStopRequest(BaseModel):
-    email: str
-
-
-class LeadResponse(BaseModel):
-    email: str
-    name: Optional[str]
-    role: Optional[str]
-    phone: Optional[str]
-    source_url: str
-    verification: dict
-    ghl: dict
-
-
-class ScrapeResponse(BaseModel):
-    success: bool
-    domain: str
-    summary: dict
-    leads: List[LeadResponse]
-    errors: Optional[List[str]] = None
-
-
-class VerifyResponse(BaseModel):
-    email: str
-    status: str
-    confidence: float
-    is_catch_all: bool
-    is_free_provider: bool
-    mx_record: Optional[str]
-    details: dict
-
-
-# Startup/shutdown events
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup and shutdown events."""
-    # Startup
-    print("Starting Lead Machine...")
-    init_db()
-    await init_verifier()
-    print("Lead Machine started!")
-    yield
-    # Shutdown
-    print("Shutting down Lead Machine...")
-
-
-# Create FastAPI app
 app = FastAPI(
-    title="Lead Machine",
-    description="Email scraping, verification, and warmup system",
-    version="1.0.0",
-    lifespan=lifespan,
+    title="Lead Machine v2.0",
+    description="Complete lead scraping, email campaigns, and CRM platform with industry databases",
+    version="2.0.0"
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -102,284 +45,578 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize modules
+verifier = EmailVerifier()
+scraper = WebsiteScraper()
+ghl_client = GHLClient(settings.GHL_API_KEY, settings.GHL_LOCATION_ID)
+warmup = EmailWarmup(settings.ENCRYPTION_KEY)
+smtp_platform = SMTPPlatform(settings.ENCRYPTION_KEY)
 
-# API Key authentication
+# Database dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# API Key verification
 async def verify_api_key(x_api_key: str = Header(...)):
-    """Verify API key from header."""
-    if not settings.API_KEY:
-        return True  # No API key configured, allow all
     if x_api_key != settings.API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return True
+    return x_api_key
 
+# ============ REQUEST/RESPONSE MODELS ============
 
-# Health check endpoint
+class ScrapeRequest(BaseModel):
+    url: str
+    industry: str
+    verify_emails: bool = True
+    push_to_ghl: bool = False
+    save_to_db: bool = True
+
+class VerifyRequest(BaseModel):
+    emails: List[EmailStr]
+
+class LeadCreate(BaseModel):
+    email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    company_name: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    industry: str
+    city: Optional[str] = None
+    state: Optional[str] = None
+
+class EmailCampaignCreate(BaseModel):
+    industry: str
+    subject: str
+    body_html: str
+    body_text: Optional[str] = None
+    from_name: str = "Ben"
+    smtp_account_id: int
+    daily_limit: int = 50
+    delay_seconds: int = 10
+
+class SMTPAccountCreate(BaseModel):
+    name: str
+    email: EmailStr
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_username: str
+    smtp_password: str
+    imap_host: str
+    imap_port: int = 993
+    imap_username: str
+    imap_password: str
+    use_tls: bool = True
+    daily_limit: int = 100
+
+class ExportRequest(BaseModel):
+    industry: str
+    format: str = "csv"  # csv, json, xlsx
+
+# ============ HEALTH & STATUS ============
+
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
     return {
         "status": "healthy",
         "service": "Lead Machine",
-        "version": settings.APP_VERSION,
+        "version": "2.0.0",
         "timestamp": datetime.utcnow().isoformat(),
+        "features": ["scraping", "verification", "smtp", "campaigns", "communications"]
     }
 
+# ============ SCRAPING ENDPOINTS ============
 
-# Scrape endpoint
-@app.post("/api/scrape", response_model=List[ScrapeResponse])
-async def scrape_domains(
-    request: ScrapeRequest,
-    background_tasks: BackgroundTasks,
-    _: bool = Depends(verify_api_key),
-):
-    """
-    Scrape domains for email addresses.
-    Accepts single domain or list of domains.
-    Verifies emails and pushes to GHL.
-    """
-    # Get domains list
-    domains = []
-    if request.domain:
-        domains.append(request.domain)
-    if request.domains:
-        domains.extend(request.domains)
-
-    if not domains:
-        raise HTTPException(status_code=400, detail="No domains provided")
-
-    results = []
-
-    for domain in domains:
-        try:
-            # Scrape the domain
-            scrape_result = await scraper.scrape_domain(domain)
-
-            leads = []
-            emails_valid = 0
-            emails_pushed = 0
-
-            for scraped_email in scrape_result.emails:
-                # Verify the email
-                verification = await verifier.verify_email(scraped_email.email)
-
-                # Build lead response
-                lead = LeadResponse(
-                    email=scraped_email.email,
-                    name=scraped_email.name,
-                    role=scraped_email.role,
-                    phone=scraped_email.phone,
-                    source_url=scraped_email.source_url,
-                    verification={
-                        "status": verification.status,
-                        "confidence": verification.confidence,
-                        "is_catch_all": verification.is_catch_all,
-                        "is_free_provider": verification.is_free_provider,
-                    },
-                    ghl={"pushed": False, "contact_id": None},
-                )
-
-                # Count valid emails
-                if verification.status == "valid":
-                    emails_valid += 1
-
-                # Push to GHL if confidence >= 70%
-                if verification.confidence >= 70:
-                    ghl_result = await ghl_client.push_lead(
-                        email=scraped_email.email,
-                        first_name=scraped_email.first_name,
-                        last_name=scraped_email.last_name,
-                        phone=scraped_email.phone,
-                        website=f"https://{domain}",
-                        source_url=scraped_email.source_url,
-                        job_title=scraped_email.role,
-                        confidence=verification.confidence,
-                        verification_status=verification.status,
-                    )
-
-                    if ghl_result.success:
-                        lead.ghl = {
-                            "pushed": True,
-                            "contact_id": ghl_result.contact_id,
-                        }
-                        emails_pushed += 1
-
-                leads.append(lead)
-
-            results.append(ScrapeResponse(
-                success=scrape_result.success,
-                domain=domain,
-                summary={
-                    "pages_crawled": scrape_result.pages_crawled,
-                    "emails_found": scrape_result.emails_found,
-                    "emails_valid": emails_valid,
-                    "emails_pushed_to_ghl": emails_pushed,
-                },
-                leads=leads,
-                errors=scrape_result.errors if scrape_result.errors else None,
-            ))
-
-        except Exception as e:
-            results.append(ScrapeResponse(
-                success=False,
-                domain=domain,
-                summary={
-                    "pages_crawled": 0,
-                    "emails_found": 0,
-                    "emails_valid": 0,
-                    "emails_pushed_to_ghl": 0,
-                },
-                leads=[],
-                errors=[str(e)],
-            ))
-
-    return results
-
-
-# Verify endpoint
-@app.post("/api/verify", response_model=List[VerifyResponse])
-async def verify_emails(
-    request: VerifyRequest,
-    _: bool = Depends(verify_api_key),
-):
-    """
-    Verify email addresses.
-    Accepts single email or list of emails.
-    """
-    emails = []
-    if request.email:
-        emails.append(request.email)
-    if request.emails:
-        emails.extend(request.emails)
-
-    if not emails:
-        raise HTTPException(status_code=400, detail="No emails provided")
-
-    results = []
-
-    for email in emails:
-        try:
-            verification = await verifier.verify_email(email)
-            results.append(VerifyResponse(
-                email=verification.email,
-                status=verification.status,
-                confidence=verification.confidence,
-                is_catch_all=verification.is_catch_all,
-                is_free_provider=verification.is_free_provider,
-                mx_record=verification.mx_record,
-                details=verification.details,
-            ))
-        except Exception as e:
-            results.append(VerifyResponse(
-                email=email,
-                status="error",
-                confidence=0.0,
-                is_catch_all=False,
-                is_free_provider=False,
-                mx_record=None,
-                details={"error": str(e)},
-            ))
-
-    return results
-
-
-# Warmup endpoints
-@app.post("/api/warmup/start")
-async def start_warmup(
-    request: WarmupStartRequest,
-    _: bool = Depends(verify_api_key),
-):
-    """Start email warmup for an account."""
+@app.post("/api/scrape", dependencies=[Depends(verify_api_key)])
+async def scrape_website(request: ScrapeRequest, db: Session = Depends(get_db)):
+    """Scrape emails from URL and save to industry database"""
     try:
-        # Encrypt passwords
-        smtp_password_encrypted = encrypt_password(request.smtp_password)
-        imap_password_encrypted = encrypt_password(request.imap_password)
-
-        # Store account (in production, save to database)
-        account = {
-            "email": request.email,
-            "smtp_host": request.smtp_host,
-            "smtp_port": request.smtp_port,
-            "smtp_username": request.smtp_username,
-            "smtp_password_encrypted": smtp_password_encrypted,
-            "imap_host": request.imap_host,
-            "imap_port": request.imap_port,
-            "imap_username": request.imap_username,
-            "imap_password_encrypted": imap_password_encrypted,
-            "is_active": True,
-            "warmup_started_at": datetime.utcnow(),
-            "total_sent": 0,
-            "total_received": 0,
-            "total_replied": 0,
-            "spam_moves": 0,
+        # Validate industry
+        valid_industries = [i.value for i in Industry]
+        if request.industry not in valid_industries:
+            raise HTTPException(400, f"Invalid industry. Must be one of: {valid_industries}")
+        
+        # Scrape
+        emails = await scraper.scrape_emails(request.url)
+        
+        results = {
+            "url": request.url,
+            "industry": request.industry,
+            "emails_found": len(emails),
+            "verified_emails": [],
+            "saved_leads": 0
         }
-
-        warmup_manager.accounts[request.email] = account
-
-        return {
-            "success": True,
-            "message": f"Warmup started for {request.email}",
-            "daily_limit": warmup_manager.get_daily_limit(0),
-        }
-
+        
+        # Verify if requested
+        if request.verify_emails:
+            for email_addr in emails:
+                verification = await verifier.verify_email(email_addr)
+                if verification.get("is_valid"):
+                    results["verified_emails"].append(verification)
+        
+        # Save to database
+        if request.save_to_db:
+            for email_data in (results["verified_emails"] or [{"email": e} for e in emails]):
+                # Check if exists
+                existing = db.query(Lead).filter(Lead.email == email_data.get("email")).first()
+                if not existing:
+                    lead = Lead(
+                        email=email_data.get("email"),
+                        industry=request.industry,
+                        source_url=request.url,
+                        source_type="scraped",
+                        email_verified=email_data.get("is_valid", False),
+                        email_verification_date=datetime.utcnow() if email_data.get("is_valid") else None,
+                        mx_records=str(email_data.get("mx_records", [])),
+                        smtp_valid=email_data.get("smtp_valid"),
+                        is_catchall=email_data.get("is_catchall")
+                    )
+                    db.add(lead)
+                    results["saved_leads"] += 1
+            
+            db.commit()
+        
+        # Push to GHL if requested
+        if request.push_to_ghl:
+            for email_data in results["verified_emails"]:
+                await ghl_client.create_contact({
+                    "email": email_data["email"],
+                    "tags": [request.industry, "lead-machine"]
+                })
+        
+        return results
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Scrape error: {e}")
+        raise HTTPException(500, str(e))
 
+@app.post("/api/verify", dependencies=[Depends(verify_api_key)])
+async def verify_emails(request: VerifyRequest):
+    """Verify a list of emails"""
+    results = []
+    for email in request.emails:
+        verification = await verifier.verify_email(email)
+        results.append(verification)
+    return {"results": results}
 
-@app.post("/api/warmup/stop")
-async def stop_warmup(
-    request: WarmupStopRequest,
-    _: bool = Depends(verify_api_key),
+# ============ LEAD DATABASE ENDPOINTS ============
+
+@app.get("/api/leads", dependencies=[Depends(verify_api_key)])
+async def get_leads(
+    industry: Optional[str] = None,
+    verified_only: bool = False,
+    limit: int = Query(100, le=1000),
+    offset: int = 0,
+    db: Session = Depends(get_db)
 ):
-    """Stop email warmup for an account."""
-    if request.email in warmup_manager.accounts:
-        warmup_manager.accounts[request.email]["is_active"] = False
-        return {
-            "success": True,
-            "message": f"Warmup stopped for {request.email}",
-        }
-    else:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-
-@app.get("/api/warmup/status")
-async def get_warmup_status(
-    _: bool = Depends(verify_api_key),
-):
-    """Get warmup status for all accounts."""
-    accounts = []
-
-    for email, account in warmup_manager.accounts.items():
-        started_at = account.get("warmup_started_at", datetime.utcnow())
-        days_active = (datetime.utcnow() - started_at).days
-
-        total_sent = account.get("total_sent", 0)
-        total_received = account.get("total_received", 0)
-        total_replied = account.get("total_replied", 0)
-        spam_moves = account.get("spam_moves", 0)
-
-        reply_rate = total_replied / max(total_sent, 1) * 100
-
-        health_score = warmup_manager.calculate_health_score(account)
-
-        accounts.append({
-            "email": email,
-            "is_active": account.get("is_active", False),
-            "days_active": days_active,
-            "current_daily_limit": warmup_manager.get_daily_limit(days_active),
-            "total_sent": total_sent,
-            "total_received": total_received,
-            "total_replied": total_replied,
-            "reply_rate": round(reply_rate, 2),
-            "spam_moves": spam_moves,
-            "health_score": round(health_score, 2),
-        })
-
+    """Get leads from database"""
+    query = db.query(Lead)
+    
+    if industry:
+        query = query.filter(Lead.industry == industry)
+    if verified_only:
+        query = query.filter(Lead.email_verified == True)
+    
+    total = query.count()
+    leads = query.offset(offset).limit(limit).all()
+    
     return {
-        "accounts": accounts,
-        "total_accounts": len(accounts),
-        "active_accounts": sum(1 for a in accounts if a["is_active"]),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "leads": [
+            {
+                "id": l.id,
+                "email": l.email,
+                "first_name": l.first_name,
+                "last_name": l.last_name,
+                "company_name": l.company_name,
+                "industry": l.industry,
+                "email_verified": l.email_verified,
+                "source_url": l.source_url,
+                "created_at": l.created_at.isoformat() if l.created_at else None
+            }
+            for l in leads
+        ]
     }
 
+@app.post("/api/leads", dependencies=[Depends(verify_api_key)])
+async def create_lead(lead_data: LeadCreate, db: Session = Depends(get_db)):
+    """Manually add a lead"""
+    existing = db.query(Lead).filter(Lead.email == lead_data.email).first()
+    if existing:
+        raise HTTPException(400, "Lead with this email already exists")
+    
+    lead = Lead(**lead_data.dict(), source_type="manual")
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    
+    return {"id": lead.id, "email": lead.email, "industry": lead.industry}
+
+@app.get("/api/leads/stats", dependencies=[Depends(verify_api_key)])
+async def get_lead_stats(db: Session = Depends(get_db)):
+    """Get lead statistics by industry"""
+    stats = db.query(
+        Lead.industry,
+        func.count(Lead.id).label("total"),
+        func.sum(Lead.email_verified.cast(Integer)).label("verified")
+    ).group_by(Lead.industry).all()
+    
+    return {
+        "industries": [
+            {
+                "industry": s[0],
+                "total_leads": s[1],
+                "verified_leads": s[2] or 0
+            }
+            for s in stats
+        ],
+        "total_all": db.query(Lead).count()
+    }
+
+@app.post("/api/leads/export", dependencies=[Depends(verify_api_key)])
+async def export_leads(request: ExportRequest, db: Session = Depends(get_db)):
+    """Export leads by industry for sale"""
+    query = db.query(Lead).filter(Lead.industry == request.industry)
+    leads = query.all()
+    
+    if not leads:
+        raise HTTPException(404, "No leads found for this industry")
+    
+    # Generate export data
+    export_data = [
+        {
+            "email": l.email,
+            "first_name": l.first_name,
+            "last_name": l.last_name,
+            "company_name": l.company_name,
+            "phone": l.phone,
+            "website": l.website,
+            "city": l.city,
+            "state": l.state,
+            "verified": l.email_verified
+        }
+        for l in leads
+    ]
+    
+    # Record export
+    export_record = ExportHistory(
+        industry=request.industry,
+        export_format=request.format,
+        record_count=len(export_data),
+        exported_at=datetime.utcnow()
+    )
+    db.add(export_record)
+    db.commit()
+    
+    return {
+        "industry": request.industry,
+        "format": request.format,
+        "record_count": len(export_data),
+        "data": export_data
+    }
+
+# ============ SMTP ACCOUNT ENDPOINTS ============
+
+@app.post("/api/smtp/accounts", dependencies=[Depends(verify_api_key)])
+async def create_smtp_account(account: SMTPAccountCreate, db: Session = Depends(get_db)):
+    """Add SMTP account for sending emails"""
+    smtp_account = SMTPAccount(
+        name=account.name,
+        email=account.email,
+        smtp_host=account.smtp_host,
+        smtp_port=account.smtp_port,
+        smtp_username=account.smtp_username,
+        smtp_password_encrypted=smtp_platform.encrypt_password(account.smtp_password),
+        imap_host=account.imap_host,
+        imap_port=account.imap_port,
+        imap_username=account.imap_username,
+        imap_password_encrypted=smtp_platform.encrypt_password(account.imap_password),
+        use_tls=account.use_tls,
+        daily_limit=account.daily_limit
+    )
+    db.add(smtp_account)
+    db.commit()
+    db.refresh(smtp_account)
+    
+    return {"id": smtp_account.id, "email": smtp_account.email}
+
+@app.get("/api/smtp/accounts", dependencies=[Depends(verify_api_key)])
+async def list_smtp_accounts(db: Session = Depends(get_db)):
+    """List all SMTP accounts"""
+    accounts = db.query(SMTPAccount).all()
+    return {
+        "accounts": [
+            {
+                "id": a.id,
+                "name": a.name,
+                "email": a.email,
+                "daily_limit": a.daily_limit,
+                "emails_sent_today": a.emails_sent_today,
+                "is_active": a.is_active,
+                "is_warming": a.is_warming
+            }
+            for a in accounts
+        ]
+    }
+
+# ============ EMAIL CAMPAIGN ENDPOINTS ============
+
+@app.post("/api/campaigns/send", dependencies=[Depends(verify_api_key)])
+async def send_campaign(
+    request: EmailCampaignCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Send email campaign to industry leads"""
+    # Get SMTP account
+    smtp_account = db.query(SMTPAccount).filter(SMTPAccount.id == request.smtp_account_id).first()
+    if not smtp_account:
+        raise HTTPException(404, "SMTP account not found")
+    
+    # Get leads for industry
+    leads = db.query(Lead).filter(
+        Lead.industry == request.industry,
+        Lead.email_verified == True
+    ).limit(request.daily_limit).all()
+    
+    if not leads:
+        raise HTTPException(404, "No verified leads found for this industry")
+    
+    # Prepare SMTP config
+    smtp_config = {
+        "name": smtp_account.name,
+        "email": smtp_account.email,
+        "smtp_host": smtp_account.smtp_host,
+        "smtp_port": smtp_account.smtp_port,
+        "smtp_username": smtp_account.smtp_username,
+        "smtp_password_encrypted": smtp_account.smtp_password_encrypted,
+        "use_tls": smtp_account.use_tls
+    }
+    
+    # Prepare leads data
+    leads_data = [
+        {
+            "id": l.id,
+            "email": l.email,
+            "first_name": l.first_name or "",
+            "last_name": l.last_name or "",
+            "company_name": l.company_name or ""
+        }
+        for l in leads
+    ]
+    
+    # Start campaign in background
+    background_tasks.add_task(
+        run_campaign,
+        smtp_config,
+        leads_data,
+        request.subject,
+        request.body_html,
+        request.body_text,
+        request.delay_seconds,
+        request.daily_limit,
+        db
+    )
+    
+    return {
+        "status": "started",
+        "industry": request.industry,
+        "leads_count": len(leads_data),
+        "smtp_account": smtp_account.email
+    }
+
+async def run_campaign(
+    smtp_config: Dict,
+    leads: List[Dict],
+    subject: str,
+    body_html: str,
+    body_text: Optional[str],
+    delay: int,
+    limit: int,
+    db: Session
+):
+    """Background task to run email campaign"""
+    results = await smtp_platform.send_bulk_campaign(
+        smtp_config=smtp_config,
+        leads=leads,
+        subject_template=subject,
+        body_html_template=body_html,
+        body_text_template=body_text,
+        delay_seconds=delay,
+        daily_limit=limit
+    )
+    logger.info(f"Campaign completed: {results}")
+
+@app.get("/api/campaigns/templates", dependencies=[Depends(verify_api_key)])
+async def get_email_templates():
+    """Get pre-built email templates by industry"""
+    return {"templates": EMAIL_TEMPLATES}
+
+# ============ COMMUNICATIONS ENDPOINTS ============
+
+@app.get("/api/communications", dependencies=[Depends(verify_api_key)])
+async def get_communications(
+    direction: Optional[str] = None,
+    is_read: Optional[bool] = None,
+    limit: int = Query(50, le=200),
+    db: Session = Depends(get_db)
+):
+    """Get communications/responses"""
+    query = db.query(Communication)
+    
+    if direction:
+        query = query.filter(Communication.direction == direction)
+    if is_read is not None:
+        query = query.filter(Communication.is_read == is_read)
+    
+    comms = query.order_by(Communication.received_at.desc()).limit(limit).all()
+    
+    return {
+        "communications": [
+            {
+                "id": c.id,
+                "lead_id": c.lead_id,
+                "direction": c.direction,
+                "from_email": c.from_email,
+                "to_email": c.to_email,
+                "subject": c.subject,
+                "body_text": c.body_text[:500] if c.body_text else None,
+                "is_read": c.is_read,
+                "is_starred": c.is_starred,
+                "received_at": c.received_at.isoformat() if c.received_at else None
+            }
+            for c in comms
+        ]
+    }
+
+@app.post("/api/communications/check-inbox", dependencies=[Depends(verify_api_key)])
+async def check_inbox_for_responses(smtp_account_id: int, db: Session = Depends(get_db)):
+    """Check inbox for responses and save to communications"""
+    smtp_account = db.query(SMTPAccount).filter(SMTPAccount.id == smtp_account_id).first()
+    if not smtp_account:
+        raise HTTPException(404, "SMTP account not found")
+    
+    imap_config = {
+        "imap_host": smtp_account.imap_host,
+        "imap_port": smtp_account.imap_port,
+        "imap_username": smtp_account.imap_username,
+        "imap_password_encrypted": smtp_account.imap_password_encrypted
+    }
+    
+    messages = await smtp_platform.check_inbox(imap_config)
+    
+    saved = 0
+    for msg in messages:
+        # Try to find matching lead
+        lead = db.query(Lead).filter(Lead.email == msg.get("from_email")).first()
+        
+        comm = Communication(
+            lead_id=lead.id if lead else None,
+            direction="inbound",
+            channel="email",
+            from_email=msg.get("from_email"),
+            to_email=msg.get("to_email"),
+            subject=msg.get("subject"),
+            body_text=msg.get("body_text"),
+            body_html=msg.get("body_html"),
+            in_reply_to=msg.get("in_reply_to"),
+            received_at=datetime.utcnow()
+        )
+        db.add(comm)
+        saved += 1
+    
+    db.commit()
+    
+    return {"messages_found": len(messages), "saved": saved}
+
+@app.patch("/api/communications/{comm_id}", dependencies=[Depends(verify_api_key)])
+async def update_communication(
+    comm_id: int,
+    is_read: Optional[bool] = None,
+    is_starred: Optional[bool] = None,
+    db: Session = Depends(get_db)
+):
+    """Mark communication as read/starred"""
+    comm = db.query(Communication).filter(Communication.id == comm_id).first()
+    if not comm:
+        raise HTTPException(404, "Communication not found")
+    
+    if is_read is not None:
+        comm.is_read = is_read
+    if is_starred is not None:
+        comm.is_starred = is_starred
+    
+    db.commit()
+    return {"id": comm_id, "is_read": comm.is_read, "is_starred": comm.is_starred}
+
+# ============ WARMUP ENDPOINTS ============
+
+@app.post("/api/warmup/start", dependencies=[Depends(verify_api_key)])
+async def start_warmup(smtp_account_id: int, db: Session = Depends(get_db)):
+    """Start email warmup for SMTP account"""
+    account = db.query(SMTPAccount).filter(SMTPAccount.id == smtp_account_id).first()
+    if not account:
+        raise HTTPException(404, "SMTP account not found")
+    
+    account.is_warming = True
+    db.commit()
+    
+    return {"status": "warmup started", "account": account.email}
+
+@app.post("/api/warmup/stop", dependencies=[Depends(verify_api_key)])
+async def stop_warmup(smtp_account_id: int, db: Session = Depends(get_db)):
+    """Stop email warmup"""
+    account = db.query(SMTPAccount).filter(SMTPAccount.id == smtp_account_id).first()
+    if not account:
+        raise HTTPException(404, "SMTP account not found")
+    
+    account.is_warming = False
+    db.commit()
+    
+    return {"status": "warmup stopped", "account": account.email}
+
+@app.get("/api/warmup/status", dependencies=[Depends(verify_api_key)])
+async def warmup_status(db: Session = Depends(get_db)):
+    """Get warmup status for all accounts"""
+    accounts = db.query(SMTPAccount).filter(SMTPAccount.is_warming == True).all()
+    return {
+        "warming_accounts": [
+            {
+                "id": a.id,
+                "email": a.email,
+                "warmup_day": a.warmup_day,
+                "emails_sent_today": a.emails_sent_today
+            }
+            for a in accounts
+        ]
+    }
+
+# ============ TRACKING ENDPOINTS ============
+
+@app.get("/api/track/open/{pixel_id}")
+async def track_open(pixel_id: str, db: Session = Depends(get_db)):
+    """Track email opens via pixel"""
+    # In production, decode pixel_id to get campaign/lead info
+    logger.info(f"Email opened: {pixel_id}")
+    # Return 1x1 transparent GIF
+    from fastapi.responses import Response
+    return Response(
+        content=b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff\x21\xf9\x04\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b',
+        media_type="image/gif"
+    )
+
+@app.get("/api/track/click/{click_id}")
+async def track_click(click_id: str, url: str, db: Session = Depends(get_db)):
+    """Track link clicks and redirect"""
+    logger.info(f"Link clicked: {click_id} -> {url}")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=url)
 
 if __name__ == "__main__":
     import uvicorn
