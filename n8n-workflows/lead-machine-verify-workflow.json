@@ -1,0 +1,87 @@
+{
+  "name": "Lead Machine - Email Verifier",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verify-emails",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook - Receive Emails",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "lead-machine-verify"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://lead-machine:8000/api/verify",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "lead-machine-secure-key-2024"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ emails: $json.body.emails || [$json.body.email] }) }}",
+        "options": {}
+      },
+      "id": "verify-node",
+      "name": "Verify Emails via Lead Machine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-node",
+      "name": "Respond with Results",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Receive Emails": {
+      "main": [
+        [
+          {
+            "node": "Verify Emails via Lead Machine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Emails via Lead Machine": {
+      "main": [
+        [
+          {
+            "node": "Respond with Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["lead-machine", "email-verification"]
+}

@@ -1,0 +1,150 @@
+{
+  "name": "Lead Machine - Email Scraper & Verifier",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-node",
+      "name": "When clicking 'Test workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://lead-machine:8000/api/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "lead-machine-secure-key-2024"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $json.url || 'https://example.com' }}"
+            },
+            {
+              "name": "verify_emails",
+              "value": "={{ true }}"
+            },
+            {
+              "name": "push_to_ghl",
+              "value": "={{ false }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "scrape-node",
+      "name": "Scrape Emails from URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.verified_emails.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-node",
+      "name": "Has Verified Emails?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process verified emails for downstream use\nconst emails = $input.first().json.verified_emails || [];\nconst url = $input.first().json.url;\n\nreturn emails.map(emailData => ({\n  json: {\n    email: emailData.email,\n    status: emailData.status,\n    mx_records: emailData.mx_records,\n    smtp_valid: emailData.smtp_valid,\n    is_catchall: emailData.is_catchall,\n    source_url: url,\n    scraped_at: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "process-node",
+      "name": "Process Verified Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "noop-node",
+      "name": "No Verified Emails",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "When clicking 'Test workflow'": {
+      "main": [
+        [
+          {
+            "node": "Scrape Emails from URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Emails from URL": {
+      "main": [
+        [
+          {
+            "node": "Has Verified Emails?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Verified Emails?": {
+      "main": [
+        [
+          {
+            "node": "Process Verified Emails",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Verified Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["lead-machine", "email-scraping"]
+}
